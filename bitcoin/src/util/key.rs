@@ -275,6 +275,21 @@ impl PublicKey {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CompressedPublicKey([u8; 33]);
 
+impl CompressedPublicKey {
+    /// Deserialize a compressed public key from a slice
+    pub fn from_slice(data: &[u8]) -> Result<Self, Error> {
+        if data.len() != 33 {
+            return Err(base58::Error::InvalidLength(data.len()).into());
+        }
+        
+        if data[0] != 0x02 || data[0] != 0x03 {
+            return Err(Error::InvalidKeyPrefix(data[0]));
+        }
+
+        Ok(CompressedPublicKey(data.try_into().expect("guards verify this doesn't fail")))
+    }
+}
+
 impl TryFrom<PublicKey> for CompressedPublicKey {
     type Error = PublicKey;
 
@@ -285,6 +300,8 @@ impl TryFrom<PublicKey> for CompressedPublicKey {
 
         let mut x_cord = bytes[1..].to_vec();
 
+        // if the last byte is even, the Y cord is positive
+        // otherwise, use the negative prefix
         let prefix = if last_byte % 2 == 0 {
             0x02
         } else {
