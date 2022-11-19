@@ -8,11 +8,14 @@
 
 use crate::prelude::*;
 
+use core::convert::TryInto;
 use core::{ops, str::FromStr};
 use core::fmt::{self, Write};
 
 use bitcoin_internals::write_err;
 pub use secp256k1::{self, Secp256k1, XOnlyPublicKey, KeyPair};
+
+use std::convert::TryFrom;
 
 use crate::io;
 use crate::network::constants::Network;
@@ -264,6 +267,57 @@ impl PublicKey {
         sk.public_key(secp)
     }
 
+}
+
+/// A public key thats been compressed. A compressed
+/// public key is a public keys X cordinate on the curve plus a prefix
+/// to denote its sign.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CompressedPublicKey([u8; 33]);
+
+const POS_COMP_PK_PREFIX: u8 = 0x02;
+const NEG_COMP_PK_PREFIX: u8 = 0x03;
+
+impl TryFrom<PublicKey> for CompressedPublicKey {
+    type Error = PublicKey;
+
+    fn try_from(pk: PublicKey) -> Result<Self, Self::Error> {
+        let mut bytes = pk.to_bytes();
+        let y_cord_bytes = bytes.split_off(32);
+
+        let mut x_cord = bytes[1..].to_vec();
+        let y_cord = u32::from_be_bytes(y_cord_bytes.try_into().expect("FIXME"));
+
+        let prefix = if y_cord % 2 == 0 {
+            POS_COMP_PK_PREFIX
+        } else {
+            NEG_COMP_PK_PREFIX
+        };
+
+        let mut out = vec![prefix];
+        out.append(&mut x_cord);
+        Ok(CompressedPublicKey(out.try_into().expect("FIXME 2")))
+    }
+}
+
+#[cfg(test)]
+mod compressed_tests {
+    use core::convert::TryFrom;
+
+    use hex_literal::hex;
+    use secp256k1::PublicKey as PK;
+    use super::PublicKey;
+
+    use super::CompressedPublicKey;
+
+    #[test]
+    fn compressed_pk_try_from() {
+        let key_bytes = hex!("0469b36c7454e7cdafa78dab359683dfb32039918ad6c9f81e4e4e3d4e2ecea9adb5f8b07fbf75d161625211db7f216b496914f6afdf5224c6d22fbb876ca3bea2");
+        let publickey = PK::from_slice(&key_bytes).unwrap();
+        let pk = PublicKey::new_uncompressed(publickey);
+        let actual = CompressedPublicKey::try_from(pk).unwrap();
+        println!("key :: {:?}", actual);
+    }
 }
 
 /// An opaque return type for PublicKey::to_sort_key
