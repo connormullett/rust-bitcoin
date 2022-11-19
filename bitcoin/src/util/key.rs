@@ -19,7 +19,7 @@ use std::convert::TryFrom;
 
 use crate::io;
 use crate::network::constants::Network;
-use crate::hashes::{Hash, hash160, hex, hex::FromHex};
+use crate::hashes::{Hash, hash160, hex::{self, FromHex}};
 use crate::hash_types::{PubkeyHash, WPubkeyHash};
 use crate::util::base58;
 
@@ -275,28 +275,26 @@ impl PublicKey {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CompressedPublicKey([u8; 33]);
 
-const POS_COMP_PK_PREFIX: u8 = 0x02;
-const NEG_COMP_PK_PREFIX: u8 = 0x03;
-
 impl TryFrom<PublicKey> for CompressedPublicKey {
     type Error = PublicKey;
 
     fn try_from(pk: PublicKey) -> Result<Self, Self::Error> {
         let mut bytes = pk.to_bytes();
-        let y_cord_bytes = bytes.split_off(32);
+        let y_cord_bytes = bytes.split_off(33);
+        let last_byte = y_cord_bytes.last().expect("a public key can't be empty");
 
         let mut x_cord = bytes[1..].to_vec();
-        let y_cord = u32::from_be_bytes(y_cord_bytes.try_into().expect("FIXME"));
 
-        let prefix = if y_cord % 2 == 0 {
-            POS_COMP_PK_PREFIX
+        let prefix = if last_byte % 2 == 0 {
+            0x02
         } else {
-            NEG_COMP_PK_PREFIX
+            0x03
         };
 
-        let mut out = vec![prefix];
-        out.append(&mut x_cord);
-        Ok(CompressedPublicKey(out.try_into().expect("FIXME 2")))
+        // prefix the X coordinate on the curve
+        // resulting in the final compressed key
+        x_cord.insert(0, prefix);
+        Ok(CompressedPublicKey(x_cord.try_into().expect("vecs don't fail")))
     }
 }
 
@@ -304,19 +302,20 @@ impl TryFrom<PublicKey> for CompressedPublicKey {
 mod compressed_tests {
     use core::convert::TryFrom;
 
-    use hex_literal::hex;
     use secp256k1::PublicKey as PK;
-    use super::PublicKey;
+    use crate::internal_macros::hex;
+    use crate::hashes::hex::ToHex;
 
-    use super::CompressedPublicKey;
+    use super::*;
 
     #[test]
     fn compressed_pk_try_from() {
-        let key_bytes = hex!("0469b36c7454e7cdafa78dab359683dfb32039918ad6c9f81e4e4e3d4e2ecea9adb5f8b07fbf75d161625211db7f216b496914f6afdf5224c6d22fbb876ca3bea2");
-        let publickey = PK::from_slice(&key_bytes).unwrap();
+        let key_bytes = hex!("04b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a87378ec38ff91d43e8c2092ebda601780485263da089465619e0358a5c1be7ac91f4");
+        let expected_hex = "02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737";
+        let publickey = PK::from_slice(key_bytes.as_slice()).unwrap();
         let pk = PublicKey::new_uncompressed(publickey);
         let actual = CompressedPublicKey::try_from(pk).unwrap();
-        println!("key :: {:?}", actual);
+        assert_eq!(actual.0.to_hex(), expected_hex);
     }
 }
 
