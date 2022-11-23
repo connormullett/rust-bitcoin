@@ -34,7 +34,7 @@ use crate::policy::DUST_RELAY_TX_FEE;
 #[cfg(feature="bitcoinconsensus")] use core::convert::From;
 use crate::OutPoint;
 
-use crate::util::key::PublicKey;
+use crate::util::key::{PublicKey, CompressedPublicKey};
 use crate::address::WitnessVersion;
 use crate::util::taproot::{LeafVersion, TapBranchHash, TapLeafHash};
 use secp256k1::{Secp256k1, Verification, XOnlyPublicKey};
@@ -1009,11 +1009,12 @@ impl Builder {
 
     /// Adds instructions to push a public key onto the stack.
     pub fn push_key(self, key: &PublicKey) -> Builder {
-        if key.compressed {
-            self.push_slice(&key.inner.serialize()[..])
-        } else {
-            self.push_slice(&key.inner.serialize_uncompressed()[..])
-        }
+        self.push_slice(&key.inner.serialize_uncompressed()[..])
+    }
+
+    /// Adds instructions to push a compressed public key onto the stack.
+    pub fn push_compressed_key(self, key: &CompressedPublicKey) -> Builder {
+        self.push_slice(&key.inner[..])
     }
 
     /// Adds instructions to push an XOnly public key onto the stack.

@@ -88,8 +88,6 @@ impl From<hex::Error> for Error {
 /// A Bitcoin ECDSA public key
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PublicKey {
-    /// Whether this public key should be serialized as compressed
-    pub compressed: bool,
     /// The actual ECDSA key
     pub inner: secp256k1::PublicKey,
 }
@@ -98,44 +96,26 @@ impl PublicKey {
     /// Constructs compressed ECDSA public key from the provided generic Secp256k1 public key
     pub fn new(key: secp256k1::PublicKey) -> PublicKey {
         PublicKey {
-            compressed: true,
             inner: key,
         }
     }
 
     /// Constructs uncompressed (legacy) ECDSA public key from the provided generic Secp256k1
     /// public key
+    #[deprecated(since="0.30.0", note="PublicKey no longer tracks compression. Use `PublicKey::new()` instead")]
     pub fn new_uncompressed(key: secp256k1::PublicKey) -> PublicKey {
         PublicKey {
-            compressed: false,
             inner: key,
         }
     }
 
     fn with_serialized<R, F: FnOnce(&[u8]) -> R>(&self, f: F) -> R {
-        if self.compressed {
-            f(&self.inner.serialize())
-        } else {
-            f(&self.inner.serialize_uncompressed())
-        }
+        f(&self.inner.serialize_uncompressed())
     }
 
     /// Returns bitcoin 160-bit hash of the public key
     pub fn pubkey_hash(&self) -> PubkeyHash {
         self.with_serialized(PubkeyHash::hash)
-    }
-
-    /// Returns bitcoin 160-bit hash of the public key for witness program
-    pub fn wpubkey_hash(&self) -> Option<WPubkeyHash> {
-        if self.compressed {
-            Some(WPubkeyHash::from_inner(
-                hash160::Hash::hash(&self.inner.serialize()).into_inner()
-            ))
-        } else {
-            // We can't create witness pubkey hashes for an uncompressed
-            // public keys
-            None
-        }
     }
 
     /// Write the public key into a writer
@@ -186,7 +166,7 @@ impl PublicKey {
     /// This method of sorting is in line with Bitcoin Core's implementation of
     /// sorting keys for output descriptors such as `sortedmulti()`.
     ///
-    /// If every `PublicKey` in the slice is `compressed == true` then this will sort
+    /// If every `PublicKey` in the slice is compressed, then this will sort
     /// the keys in a
     /// [BIP67](https://github.com/bitcoin/bips/blob/master/bip-0067.mediawiki)
     /// compliant way.
@@ -227,37 +207,25 @@ impl PublicKey {
     /// assert_eq!(unsorted, sorted);
     /// ```
     pub fn to_sort_key(self) -> SortKey {
-        if self.compressed {
-            let bytes = self.inner.serialize();
-            let mut res = [0; 32];
-            res[..].copy_from_slice(&bytes[1..33]);
-            SortKey(bytes[0], res, [0; 32])
-        } else {
-            let bytes = self.inner.serialize_uncompressed();
-            let mut res_left = [0; 32];
-            let mut res_right = [0; 32];
-            res_left[..].copy_from_slice(&bytes[1..33]);
-            res_right[..].copy_from_slice(&bytes[33..65]);
-            SortKey(bytes[0], res_left, res_right)
-        }
+        let bytes = self.inner.serialize_uncompressed();
+        let mut res_left = [0; 32];
+        let mut res_right = [0; 32];
+        res_left[..].copy_from_slice(&bytes[1..33]);
+        res_right[..].copy_from_slice(&bytes[33..65]);
+        SortKey(bytes[0], res_left, res_right)
     }
 
     /// Deserialize a public key from a slice
     pub fn from_slice(data: &[u8]) -> Result<PublicKey, Error> {
-        let compressed = match data.len() {
-            33 => true,
-            65 => false,
-            len =>  {
-                return Err(base58::Error::InvalidLength(len).into());
-            },
-        };
+        if data.len() != 65 {
+            return Err(base58::Error::InvalidLength(data.len()).into());
+        }
 
-        if !compressed && data[0] != 0x04 {
+        if data[0] != 0x04 {
             return Err(Error::InvalidKeyPrefix(data[0]))
         }
 
         Ok(PublicKey {
-            compressed,
             inner: secp256k1::PublicKey::from_slice(data)?,
         })
     }
@@ -267,13 +235,22 @@ impl PublicKey {
         sk.public_key(secp)
     }
 
+    /// Serialize the public key to its byte-encoded compressed form
+    pub fn compress(&self) -> CompressedPublicKey {
+        CompressedPublicKey { inner: self.inner.serialize() }
+    }
+
 }
 
 /// A public key thats been compressed. A compressed
 /// public key is a public keys X cordinate on the curve plus a prefix
-/// to denote its sign.
+/// to denote the Y values sign.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CompressedPublicKey([u8; 33]);
+pub struct CompressedPublicKey {
+    /// The actual ECDSA compressed key. This key does not contain a Y coordinate
+    /// value, but encodes it as a one byte prefix.
+    pub inner: [u8; 33]
+}
 
 impl CompressedPublicKey {
     /// Deserialize a compressed public key from a slice
@@ -286,8 +263,28 @@ impl CompressedPublicKey {
             return Err(Error::InvalidKeyPrefix(data[0]));
         }
 
-        Ok(CompressedPublicKey(data.try_into().expect("guards verify this doesn't fail")))
+        Ok(CompressedPublicKey { inner: data.try_into().expect("guards verify this doesn't fail") })
     }
+
+    /// Returns bitcoin 160-bit hash of the public key for witness program
+    pub fn wpubkey_hash(&self) -> Option<WPubkeyHash> {
+        Some(WPubkeyHash::from_inner(
+            hash160::Hash::hash(&self.inner).into_inner()
+        ))
+    }
+
+    /// Convert the key to a 
+    /// [BIP67](https://github.com/bitcoin/bips/blob/master/bip-0067.mediawiki)
+    /// compliant sortable key.
+    ///
+    /// See `PublicKey::to_sort_key()`
+    pub fn to_sort_key(self) -> SortKey {
+        let bytes = self.inner;
+        let mut res = [0; 32];
+        res[..].copy_from_slice(&bytes[1..33]);
+        SortKey(bytes[0], res, [0; 32])
+    }
+
 }
 
 impl TryFrom<PublicKey> for CompressedPublicKey {
@@ -311,28 +308,23 @@ impl TryFrom<PublicKey> for CompressedPublicKey {
         // prefix the X coordinate on the curve
         // resulting in the final compressed key
         x_cord.insert(0, prefix);
-        Ok(CompressedPublicKey(x_cord.try_into().expect("vecs don't fail")))
+        Ok(CompressedPublicKey { inner: x_cord.try_into().expect("vecs don't fail") })
     }
 }
 
 #[cfg(test)]
 mod compressed_tests {
     use core::convert::TryFrom;
-
-    use secp256k1::PublicKey as PK;
     use crate::internal_macros::hex;
-    use crate::hashes::hex::ToHex;
-
     use super::*;
 
     #[test]
     fn compressed_pk_try_from() {
         let key_bytes = hex!("04b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a87378ec38ff91d43e8c2092ebda601780485263da089465619e0358a5c1be7ac91f4");
-        let expected_hex = "02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737";
-        let publickey = PK::from_slice(key_bytes.as_slice()).unwrap();
-        let pk = PublicKey::new_uncompressed(publickey);
+        let expected = CompressedPublicKey::from_slice(&hex!("02b4632d08485ff1df2db55b9dafd23347d1c47a457072a1e87be26896549a8737")).unwrap();
+        let pk = PublicKey::from_slice(&key_bytes).unwrap();
         let actual = CompressedPublicKey::try_from(pk).unwrap();
-        assert_eq!(actual.0.to_hex(), expected_hex);
+        assert_eq!(actual, expected);
     }
 }
 
@@ -405,7 +397,6 @@ impl PrivateKey {
     /// Creates a public key from this private key
     pub fn public_key<C: secp256k1::Signing>(&self, secp: &Secp256k1<C>) -> PublicKey {
         PublicKey {
-            compressed: self.compressed,
             inner: secp256k1::PublicKey::from_secret_key(secp, &self.inner)
         }
     }

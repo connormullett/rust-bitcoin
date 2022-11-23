@@ -439,7 +439,7 @@ impl Payload {
     pub fn p2wpkh(pk: &PublicKey) -> Result<Payload, Error> {
         Ok(Payload::WitnessProgram {
             version: WitnessVersion::V0,
-            program: pk.wpubkey_hash().ok_or(Error::UncompressedPubkey)?.to_vec(),
+            program: pk.compress().wpubkey_hash().ok_or(Error::UncompressedPubkey)?.to_vec(),
         })
     }
 
@@ -447,7 +447,7 @@ impl Payload {
     pub fn p2shwpkh(pk: &PublicKey) -> Result<Payload, Error> {
         let builder = script::Builder::new()
             .push_int(0)
-            .push_slice(&pk.wpubkey_hash().ok_or(Error::UncompressedPubkey)?);
+            .push_slice(&pk.compress().wpubkey_hash().ok_or(Error::UncompressedPubkey)?);
 
         Ok(Payload::ScriptHash(builder.into_script().script_hash()))
     }
